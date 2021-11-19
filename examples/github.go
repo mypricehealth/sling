@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"github.com/coreos/pkg/flagutil"
-	"github.com/dghubble/sling"
+	"github.com/mypricehealth/sling"
 	"golang.org/x/oauth2"
 )
 
