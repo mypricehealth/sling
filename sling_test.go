@@ -746,8 +746,8 @@ func TestDo_onFailureWithNilValue(t *testing.T) {
 	model := new(FakeModel)
 	resp, err := sling.Do(req, model, nil)
 
-	if err != nil {
-		t.Errorf("expected nil, got %v", err)
+	if err == nil {
+		t.Errorf("expected error, got nil")
 	}
 	if resp.StatusCode != 420 {
 		t.Errorf("expected %d, got %d", 420, resp.StatusCode)

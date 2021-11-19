@@ -487,7 +487,7 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 		}
 		var buf bytes.Buffer
 		buf.ReadFrom(resp.Body)
-		return fmt.Errorf("error %d - %s: body: %s", resp.StatusCode, resp.Status, buf.String())
+		return fmt.Errorf("error %s: body: %s", resp.Status, buf.String())
 	}
 	return nil
 }

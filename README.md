@@ -1,10 +1,12 @@
-# Sling [![Build Status](https://github.com/dghubble/sling/workflows/test/badge.svg)](https://github.com/dghubble/oauth1/actions?query=workflow%3Atest+branch%3Amaster) [![Coverage](https://gocover.io/_badge/github.com/dghubble/sling)](https://gocover.io/github.com/dghubble/sling) [![GoDoc](https://godoc.org/github.com/dghubble/sling?status.svg)](https://godoc.org/github.com/dghubble/sling)
+# Sling [![Build Status](https://github.com/mypricehealth/sling/workflows/test/badge.svg)](https://github.com/mypricehealth/oauth1/actions?query=workflow%3Atest+branch%3Amaster) [![Coverage](https://gocover.io/_badge/github.com/mypricehealth/sling)](https://gocover.io/github.com/mypricehealth/sling) [![GoDoc](https://godoc.org/github.com/mypricehealth/sling?status.svg)](https://godoc.org/github.com/mypricehealth/sling)
 
 <img align="right" src="https://storage.googleapis.com/dghubble/small-gopher-with-sling.png">
 
 Sling is a Go HTTP client library for creating and sending API requests.
 
 Slings store HTTP Request properties to simplify sending requests and decoding responses. Check [usage](#usage) or the [examples](examples) to learn how to compose a Sling into your API client.
+
+This is a fork of the package by `dghubble` and adds some additional features not currently supported in the original (see the "mypricehealth Exclusive Features" section). There is a PR in for the `dghubble` package with these additional features (https://github.com/dghubble/sling/pull/71), so this package will be retired if/when that PR gets merged.
 
 ### Features
 
@@ -15,15 +17,31 @@ Slings store HTTP Request properties to simplify sending requests and decoding r
 * Encode a form or JSON into the Request Body
 * Receive JSON success or failure responses
 
+
+### mypricehealth Exclusive Features
+
+* The ability to set a body form with `url.Values` in addition to using a struct and `go-query`. While I love the `goquery` mechanism, there are times, I just want to go straight to `url.Values` directly.
+* The ability to set all headers or add to all headers at once. Sometimes it's just easier to pass it all in at once
+* The ability to set the http method directly
+* The ability to add queryString parameters using `url.Values` in addition to `goquery`
+* The ability to run the final request with a `Context`
+
+### mypricehealth Bug Fixes
+* Return an error string if no error struct is supplied and an error is returned by the http request (the error is swallowed in the `dghubble` package)
+
+### Fork motivation
+
+This fork enables a nice `Do` method API packages with a `Context`, access to all http methods, and flexibility for getting data into the query string or body. 
+
 ## Install
 
 ```
-go get github.com/dghubble/sling
+go get github.com/mypricehealth/sling
 ```
 
 ## Documentation
 
-Read [GoDoc](https://godoc.org/github.com/dghubble/sling)
+Read [GoDoc](https://godoc.org/github.com/mypricehealth/sling)
 
 ## Usage
 
@@ -267,7 +285,7 @@ func (s *IssueService) ListByRepo(owner, repo string, params *IssueListParams) (
 }
 ```
 
-## Example APIs using Sling
+## Example APIs using `dghubble` Sling
 
 * Digits [dghubble/go-digits](https://github.com/dghubble/go-digits)
 * GoSquared [drinkin/go-gosquared](https://github.com/drinkin/go-gosquared)
@@ -278,6 +296,10 @@ func (s *IssueService) ListByRepo(owner, repo string, params *IssueListParams) (
 * Stacksmith [jesustinoco/go-smith](https://github.com/jesustinoco/go-smith)
 
 Create a Pull Request to add a link to your own API.
+
+## Example APIs using `mypricehealth` Sling
+
+* Geocodio [mypricehealth/geocodio](https://github.com/mypricehealth/geocodio)
 
 ## Motivation
 
