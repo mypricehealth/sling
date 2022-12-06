@@ -58,9 +58,9 @@ func New() *Sling {
 // New returns a copy of a Sling for creating a new Sling with properties
 // from a parent Sling. For example,
 //
-// 	parentSling := sling.New().Client(client).Base("https://api.io/")
-// 	fooSling := parentSling.New().Get("foo/")
-// 	barSling := parentSling.New().Get("bar/")
+//	parentSling := sling.New().Client(client).Base("https://api.io/")
+//	fooSling := parentSling.New().Get("foo/")
+//	barSling := parentSling.New().Get("bar/")
 //
 // fooSling and barSling will both use the same client, but send requests to
 // https://api.io/foo/ and https://api.io/bar/ respectively.
@@ -487,7 +487,7 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 		}
 		var buf bytes.Buffer
 		buf.ReadFrom(resp.Body)
-		return fmt.Errorf("error %s: body: %s", resp.Status, buf.String())
+		return fmt.Errorf(buf.String())
 	}
 	return nil
 }
