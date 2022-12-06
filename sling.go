@@ -1,7 +1,6 @@
 package sling
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -18,6 +17,24 @@ const (
 	jsonContentType = "application/json"
 	formContentType = "application/x-www-form-urlencoded"
 )
+
+type Error struct {
+	StatusCode int
+	Err        error
+	Body       string
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("code: %d, error %s: body: %s", e.StatusCode, e.Err, e.Body)
+}
+
+func newError(body []byte, statusCode int, err error) *Error {
+	return &Error{
+		StatusCode: statusCode,
+		Err:        err,
+		Body:       string(body),
+	}
+}
 
 // Doer executes http requests.  It is implemented by *http.Client.  You can
 // wrap *http.Client with layers of Doers to form a stack of client-side
@@ -58,9 +75,9 @@ func New() *Sling {
 // New returns a copy of a Sling for creating a new Sling with properties
 // from a parent Sling. For example,
 //
-// 	parentSling := sling.New().Client(client).Base("https://api.io/")
-// 	fooSling := parentSling.New().Get("foo/")
-// 	barSling := parentSling.New().Get("bar/")
+//	parentSling := sling.New().Client(client).Base("https://api.io/")
+//	fooSling := parentSling.New().Get("foo/")
+//	barSling := parentSling.New().Get("bar/")
 //
 // fooSling and barSling will both use the same client, but send requests to
 // https://api.io/foo/ and https://api.io/bar/ respectively.
@@ -485,9 +502,12 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 		if failureV != nil {
 			return decoder.Decode(resp, failureV)
 		}
-		var buf bytes.Buffer
-		buf.ReadFrom(resp.Body)
-		return fmt.Errorf("error %s: body: %s", resp.Status, buf.String())
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return newError(body, resp.StatusCode, err)
+		}
+		return newError(body, resp.StatusCode, fmt.Errorf("error not decoded: see body for details"))
 	}
 	return nil
 }
