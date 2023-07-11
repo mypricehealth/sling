@@ -275,7 +275,7 @@ func TestBasicAuth(t *testing.T) {
 		{New().SetBasicAuth("admin", ""), []string{"admin", ""}},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err != nil {
 			t.Errorf("unexpected error when building Request with .SetBasicAuth()")
 		}
@@ -438,7 +438,7 @@ func TestRequest_urlAndMethod(t *testing.T) {
 		{New().Base("http://a.io/").Get("/foo"), "GET", "http://a.io/foo", nil},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err != c.expectedErr {
 			t.Errorf("expected error %v, got %v for %+v", c.expectedErr, err, c.sling)
 		}
@@ -463,7 +463,7 @@ func TestRequest_queryStructs(t *testing.T) {
 		{New().Base("http://a.io").QueryStruct(paramsA).New().QueryStruct(paramsB), "http://a.io?count=25&kind_name=recent&limit=30"},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		if req.URL.String() != c.expectedURL {
 			t.Errorf("expected url %s, got %s for %+v", c.expectedURL, req.URL.String(), c.sling)
 		}
@@ -499,7 +499,7 @@ func TestRequest_body(t *testing.T) {
 		{New().Body(strings.NewReader("a")).Body(strings.NewReader("b")), "b", ""},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(req.Body)
 		// req.Body should have contained the expectedBody string
@@ -521,7 +521,7 @@ func TestRequest_bodyNoData(t *testing.T) {
 		New().BodyForm(nil),
 	}
 	for _, sling := range slings {
-		req, _ := sling.Request()
+		req, _ := sling.request()
 		if req.Body != nil {
 			t.Errorf("expected nil Request.Body, got %v", req.Body)
 		}
@@ -541,7 +541,7 @@ func TestRequest_bodyEncodeErrors(t *testing.T) {
 		{New().BodyJSON(FakeModel{Temperature: math.Inf(1)}), errors.New("json: unsupported value: +Inf")},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err == nil || err.Error() != c.expectedErr.Error() {
 			t.Errorf("expected error %v, got %v", c.expectedErr, err)
 		}
@@ -572,7 +572,7 @@ func TestRequest_headers(t *testing.T) {
 		{New().Add("A", "B").New().Set("a", "c"), map[string][]string{"A": {"c"}}},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		// type conversion from Header to alias'd map for deep equality comparison
 		headerMap := map[string][]string(req.Header)
 		if !reflect.DeepEqual(c.expectedHeader, headerMap) {
@@ -626,7 +626,7 @@ func TestDo_onSuccess(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -654,7 +654,7 @@ func TestDo_onSuccessWithNilValue(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://example.com/success", nil)
 
 	apiError := new(APIError)
-	resp, err := sling.Do(req, nil, apiError)
+	resp, err := sling.doDecode(req, nil, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -680,7 +680,7 @@ func TestDo_noContent(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -715,7 +715,7 @@ func TestDo_onFailure(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -744,7 +744,7 @@ func TestDo_onFailureWithNilValue(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://example.com/failure", nil)
 
 	model := new(FakeModel)
-	resp, err := sling.Do(req, model, nil)
+	resp, err := sling.doDecode(req, model, nil)
 
 	if err == nil {
 		t.Errorf("expected error, got nil")
@@ -922,6 +922,43 @@ func TestReceive_errorCreatingRequest(t *testing.T) {
 	}
 	if resp != nil {
 		t.Errorf("expected nil resp, got %v", resp)
+	}
+}
+
+type testTracer struct {
+	beginTrace func(ctx context.Context)
+	endTrace   func(ctx context.Context)
+}
+
+func (t *testTracer) BeginTrace(ctx context.Context) {
+	t.beginTrace(ctx)
+}
+
+func (t *testTracer) EndTrace(ctx context.Context) {
+	t.endTrace(ctx)
+}
+
+func TestTracer(t *testing.T) {
+	calls := []string{}
+
+	tracer := &testTracer{
+		func(ctx context.Context) {
+			calls = append(calls, "beginTrace")
+		},
+		func(ctx context.Context) {
+			calls = append(calls, "endTrace")
+		},
+	}
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	_, err := New().Get(s.URL).Tracer(tracer).Receive(nil, nil)
+	if err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+
+	if len(calls) != 2 || calls[0] != "beginTrace" || calls[1] != "endTrace" {
+		t.Errorf("expected to call beginTrace and then endTrace, calls were %+v", calls)
 	}
 }
 
