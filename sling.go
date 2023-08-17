@@ -445,6 +445,19 @@ func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV inter
 }
 
 func (s *Sling) Do(req *http.Request) (*http.Response, error) {
+	resp, err := s.doWithTrace(req)
+	if err != nil {
+		return resp, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp, fmt.Errorf("status code %d was not successful", resp.StatusCode)
+	}
+
+	return resp, nil
+}
+
+func (s *Sling) doWithTrace(req *http.Request) (*http.Response, error) {
 	if s.tracer != nil {
 		s.tracer.BeginTrace(req.Context())
 	}
@@ -465,7 +478,7 @@ func (s *Sling) Do(req *http.Request) (*http.Response, error) {
 // decoding is skipped. Any error sending the request or decoding the response
 // is returned.
 func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
-	resp, err := s.Do(req)
+	resp, err := s.doWithTrace(req)
 	if err != nil {
 		return resp, err
 	}
