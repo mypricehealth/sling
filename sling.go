@@ -444,7 +444,12 @@ func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV inter
 	return s.doDecode(req, successV, failureV)
 }
 
-func (s *Sling) Do(req *http.Request) (*http.Response, error) {
+func (s *Sling) Do(ctx context.Context) (*http.Response, error) {
+	req, err := s.requestWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := s.doWithTrace(req)
 	if err != nil {
 		return resp, err
