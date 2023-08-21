@@ -464,7 +464,10 @@ func (s *Sling) Do(ctx context.Context) (*http.Response, error) {
 
 func (s *Sling) doWithTrace(req *http.Request) (*http.Response, error) {
 	if s.tracer != nil {
-		s.tracer.BeginTrace(req.Context())
+		err := s.tracer.BeginTrace(req.Context())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	resp, err := s.httpClient.Do(req)

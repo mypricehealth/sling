@@ -926,39 +926,57 @@ func TestReceive_errorCreatingRequest(t *testing.T) {
 }
 
 type testTracer struct {
-	beginTrace func(ctx context.Context)
-	endTrace   func(ctx context.Context)
+	beginTrace func(ctx context.Context) error
+	endTrace   func(ctx context.Context) error
 }
 
-func (t *testTracer) BeginTrace(ctx context.Context) {
-	t.beginTrace(ctx)
+func (t *testTracer) BeginTrace(ctx context.Context) error {
+	return t.beginTrace(ctx)
 }
 
-func (t *testTracer) EndTrace(ctx context.Context) {
-	t.endTrace(ctx)
+func (t *testTracer) EndTrace(ctx context.Context) error {
+	return t.endTrace(ctx)
 }
 
-func TestTracer(t *testing.T) {
-	calls := []string{}
+type tracerAndCalls struct {
+	*testTracer
+	calls []string
+}
 
-	tracer := &testTracer{
-		func(ctx context.Context) {
-			calls = append(calls, "beginTrace")
+func newTestTracer() *tracerAndCalls {
+	tracer := &tracerAndCalls{calls: []string{}}
+	tracer.testTracer = &testTracer{
+		func(ctx context.Context) error {
+			tracer.calls = append(tracer.calls, "beginTrace")
+			return nil
 		},
-		func(ctx context.Context) {
-			calls = append(calls, "endTrace")
+		func(ctx context.Context) error {
+			tracer.calls = append(tracer.calls, "endTrace")
+			return nil
 		},
 	}
 
+	return tracer
+}
+
+func TestTracer(t *testing.T) {
+	tracer := newTestTracer()
+
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
-	_, err := New().Get(s.URL).Tracer(tracer).Receive(nil, nil)
+	sling := New().Get(s.URL).Tracer(tracer)
+
+	if len(tracer.calls) != 0 {
+		t.Errorf("tracer should not be called yet but had calls %v", tracer.calls)
+	}
+
+	_, err := sling.Receive(nil, nil)
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}
 
-	if len(calls) != 2 || calls[0] != "beginTrace" || calls[1] != "endTrace" {
-		t.Errorf("expected to call beginTrace and then endTrace, calls were %+v", calls)
+	if len(tracer.calls) != 2 || tracer.calls[0] != "beginTrace" || tracer.calls[1] != "endTrace" {
+		t.Errorf("expected to call beginTrace and then endTrace, calls were %+v", tracer.calls)
 	}
 }
 
