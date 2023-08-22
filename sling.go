@@ -42,6 +42,8 @@ type Sling struct {
 	bodyProvider BodyProvider
 	// response decoder
 	responseDecoder ResponseDecoder
+	// allows tracing the request through its lifetime
+	tracer Tracer
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -267,6 +269,12 @@ func (s *Sling) QueryValues(values url.Values) *Sling {
 	return s
 }
 
+// Allows you to set a tracer to facilitate distributed tracing.
+func (s *Sling) Tracer(tracer Tracer) *Sling {
+	s.tracer = tracer
+	return s
+}
+
 // Body
 
 // Body sets the Sling's body. The body value will be set as the Body on new
@@ -322,14 +330,11 @@ func (s *Sling) BodyForm(bodyForm interface{}) *Sling {
 // Request returns a new http.Request created with the Sling properties.
 // Returns any errors parsing the rawURL, encoding query structs, encoding
 // the body, or creating the http.Request.
-func (s *Sling) Request() (*http.Request, error) {
-	return s.RequestWithContext(context.Background())
+func (s *Sling) request() (*http.Request, error) {
+	return s.requestWithContext(context.Background())
 }
 
-// Request returns a new http.Request created with the Sling properties.
-// Returns any errors parsing the rawURL, encoding query structs, encoding
-// the body, or creating the http.Request.
-func (s *Sling) RequestWithContext(ctx context.Context) (*http.Request, error) {
+func (s *Sling) requestWithContext(ctx context.Context) (*http.Request, error) {
 	reqURL, err := url.Parse(s.rawURL)
 	if err != nil {
 		return nil, err
@@ -432,11 +437,46 @@ func (s *Sling) Receive(successV, failureV interface{}) (*http.Response, error) 
 // the response is returned.
 // Receive is shorthand for calling Request and Do.
 func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV interface{}) (*http.Response, error) {
-	req, err := s.RequestWithContext(ctx)
+	req, err := s.requestWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.Do(req, successV, failureV)
+	return s.doDecode(req, successV, failureV)
+}
+
+func (s *Sling) Do(ctx context.Context) (*http.Response, error) {
+	req, err := s.requestWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.doWithTrace(req)
+	if err != nil {
+		return resp, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp, fmt.Errorf("status code %d was not successful", resp.StatusCode)
+	}
+
+	return resp, nil
+}
+
+func (s *Sling) doWithTrace(req *http.Request) (*http.Response, error) {
+	if s.tracer != nil {
+		err := s.tracer.BeginTrace(req.Context())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	resp, err := s.httpClient.Do(req)
+
+	if resp != nil && s.tracer != nil {
+		resp.Body = &bodyWithTracer{req.Context(), resp.Body, s.tracer, false}
+	}
+
+	return resp, err
 }
 
 // Do sends an HTTP request and returns the response. Success responses (2XX)
@@ -445,8 +485,8 @@ func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV inter
 // If the status code of response is 204(no content) or the Content-Length is 0,
 // decoding is skipped. Any error sending the request or decoding the response
 // is returned.
-func (s *Sling) Do(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
-	resp, err := s.httpClient.Do(req)
+func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
+	resp, err := s.doWithTrace(req)
 	if err != nil {
 		return resp, err
 	}

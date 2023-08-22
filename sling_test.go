@@ -65,14 +65,14 @@ func TestSlingNew(t *testing.T) {
 	fakeBodyProvider := jsonBodyProvider{FakeModel{}}
 
 	cases := []*Sling{
-		&Sling{httpClient: &http.Client{}, method: "GET", rawURL: "http://example.com"},
-		&Sling{httpClient: nil, method: "", rawURL: "http://example.com"},
-		&Sling{queryStructs: make([]interface{}, 0)},
-		&Sling{queryStructs: []interface{}{paramsA}},
-		&Sling{queryStructs: []interface{}{paramsA, paramsB}},
-		&Sling{bodyProvider: fakeBodyProvider},
-		&Sling{bodyProvider: fakeBodyProvider},
-		&Sling{bodyProvider: nil},
+		{httpClient: &http.Client{}, method: "GET", rawURL: "http://example.com"},
+		{httpClient: nil, method: "", rawURL: "http://example.com"},
+		{queryStructs: make([]interface{}, 0)},
+		{queryStructs: []interface{}{paramsA}},
+		{queryStructs: []interface{}{paramsA, paramsB}},
+		{bodyProvider: fakeBodyProvider},
+		{bodyProvider: fakeBodyProvider},
+		{bodyProvider: nil},
 		New().Add("Content-Type", "application/json"),
 		New().Add("A", "B").Add("a", "c").New(),
 		New().Add("A", "B").New().Add("a", "c"),
@@ -223,14 +223,14 @@ func TestAddHeader(t *testing.T) {
 		sling          *Sling
 		expectedHeader map[string][]string
 	}{
-		{New().Add("authorization", "OAuth key=\"value\""), map[string][]string{"Authorization": []string{"OAuth key=\"value\""}}},
+		{New().Add("authorization", "OAuth key=\"value\""), map[string][]string{"Authorization": {"OAuth key=\"value\""}}},
 		// header keys should be canonicalized
-		{New().Add("content-tYPE", "application/json").Add("User-AGENT", "sling"), map[string][]string{"Content-Type": []string{"application/json"}, "User-Agent": []string{"sling"}}},
+		{New().Add("content-tYPE", "application/json").Add("User-AGENT", "sling"), map[string][]string{"Content-Type": {"application/json"}, "User-Agent": {"sling"}}},
 		// values for existing keys should be appended
-		{New().Add("A", "B").Add("a", "c"), map[string][]string{"A": []string{"B", "c"}}},
+		{New().Add("A", "B").Add("a", "c"), map[string][]string{"A": {"B", "c"}}},
 		// Add should add to values for keys added by parent Slings
-		{New().Add("A", "B").Add("a", "c").New(), map[string][]string{"A": []string{"B", "c"}}},
-		{New().Add("A", "B").New().Add("a", "c"), map[string][]string{"A": []string{"B", "c"}}},
+		{New().Add("A", "B").Add("a", "c").New(), map[string][]string{"A": {"B", "c"}}},
+		{New().Add("A", "B").New().Add("a", "c"), map[string][]string{"A": {"B", "c"}}},
 	}
 	for _, c := range cases {
 		// type conversion from header to alias'd map for deep equality comparison
@@ -247,11 +247,11 @@ func TestSetHeader(t *testing.T) {
 		expectedHeader map[string][]string
 	}{
 		// should replace existing values associated with key
-		{New().Add("A", "B").Set("a", "c"), map[string][]string{"A": []string{"c"}}},
-		{New().Set("content-type", "A").Set("Content-Type", "B"), map[string][]string{"Content-Type": []string{"B"}}},
+		{New().Add("A", "B").Set("a", "c"), map[string][]string{"A": {"c"}}},
+		{New().Set("content-type", "A").Set("Content-Type", "B"), map[string][]string{"Content-Type": {"B"}}},
 		// Set should replace values received by copying parent Slings
-		{New().Set("A", "B").Add("a", "c").New(), map[string][]string{"A": []string{"B", "c"}}},
-		{New().Add("A", "B").New().Set("a", "c"), map[string][]string{"A": []string{"c"}}},
+		{New().Set("A", "B").Add("a", "c").New(), map[string][]string{"A": {"B", "c"}}},
+		{New().Add("A", "B").New().Set("a", "c"), map[string][]string{"A": {"c"}}},
 	}
 	for _, c := range cases {
 		// type conversion from Header to alias'd map for deep equality comparison
@@ -275,7 +275,7 @@ func TestBasicAuth(t *testing.T) {
 		{New().SetBasicAuth("admin", ""), []string{"admin", ""}},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err != nil {
 			t.Errorf("unexpected error when building Request with .SetBasicAuth()")
 		}
@@ -438,7 +438,7 @@ func TestRequest_urlAndMethod(t *testing.T) {
 		{New().Base("http://a.io/").Get("/foo"), "GET", "http://a.io/foo", nil},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err != c.expectedErr {
 			t.Errorf("expected error %v, got %v for %+v", c.expectedErr, err, c.sling)
 		}
@@ -463,7 +463,7 @@ func TestRequest_queryStructs(t *testing.T) {
 		{New().Base("http://a.io").QueryStruct(paramsA).New().QueryStruct(paramsB), "http://a.io?count=25&kind_name=recent&limit=30"},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		if req.URL.String() != c.expectedURL {
 			t.Errorf("expected url %s, got %s for %+v", c.expectedURL, req.URL.String(), c.sling)
 		}
@@ -499,7 +499,7 @@ func TestRequest_body(t *testing.T) {
 		{New().Body(strings.NewReader("a")).Body(strings.NewReader("b")), "b", ""},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(req.Body)
 		// req.Body should have contained the expectedBody string
@@ -521,7 +521,7 @@ func TestRequest_bodyNoData(t *testing.T) {
 		New().BodyForm(nil),
 	}
 	for _, sling := range slings {
-		req, _ := sling.Request()
+		req, _ := sling.request()
 		if req.Body != nil {
 			t.Errorf("expected nil Request.Body, got %v", req.Body)
 		}
@@ -541,7 +541,7 @@ func TestRequest_bodyEncodeErrors(t *testing.T) {
 		{New().BodyJSON(FakeModel{Temperature: math.Inf(1)}), errors.New("json: unsupported value: +Inf")},
 	}
 	for _, c := range cases {
-		req, err := c.sling.Request()
+		req, err := c.sling.request()
 		if err == nil || err.Error() != c.expectedErr.Error() {
 			t.Errorf("expected error %v, got %v", c.expectedErr, err)
 		}
@@ -556,23 +556,23 @@ func TestRequest_headers(t *testing.T) {
 		sling          *Sling
 		expectedHeader map[string][]string
 	}{
-		{New().Add("authorization", "OAuth key=\"value\""), map[string][]string{"Authorization": []string{"OAuth key=\"value\""}}},
+		{New().Add("authorization", "OAuth key=\"value\""), map[string][]string{"Authorization": {"OAuth key=\"value\""}}},
 		// header keys should be canonicalized
-		{New().Add("content-tYPE", "application/json").Add("User-AGENT", "sling"), map[string][]string{"Content-Type": []string{"application/json"}, "User-Agent": []string{"sling"}}},
+		{New().Add("content-tYPE", "application/json").Add("User-AGENT", "sling"), map[string][]string{"Content-Type": {"application/json"}, "User-Agent": {"sling"}}},
 		// values for existing keys should be appended
-		{New().Add("A", "B").Add("a", "c"), map[string][]string{"A": []string{"B", "c"}}},
+		{New().Add("A", "B").Add("a", "c"), map[string][]string{"A": {"B", "c"}}},
 		// Add should add to values for keys added by parent Slings
-		{New().Add("A", "B").Add("a", "c").New(), map[string][]string{"A": []string{"B", "c"}}},
-		{New().Add("A", "B").New().Add("a", "c"), map[string][]string{"A": []string{"B", "c"}}},
+		{New().Add("A", "B").Add("a", "c").New(), map[string][]string{"A": {"B", "c"}}},
+		{New().Add("A", "B").New().Add("a", "c"), map[string][]string{"A": {"B", "c"}}},
 		// Add and Set
-		{New().Add("A", "B").Set("a", "c"), map[string][]string{"A": []string{"c"}}},
-		{New().Set("content-type", "A").Set("Content-Type", "B"), map[string][]string{"Content-Type": []string{"B"}}},
+		{New().Add("A", "B").Set("a", "c"), map[string][]string{"A": {"c"}}},
+		{New().Set("content-type", "A").Set("Content-Type", "B"), map[string][]string{"Content-Type": {"B"}}},
 		// Set should replace values received by copying parent Slings
-		{New().Set("A", "B").Add("a", "c").New(), map[string][]string{"A": []string{"B", "c"}}},
-		{New().Add("A", "B").New().Set("a", "c"), map[string][]string{"A": []string{"c"}}},
+		{New().Set("A", "B").Add("a", "c").New(), map[string][]string{"A": {"B", "c"}}},
+		{New().Add("A", "B").New().Set("a", "c"), map[string][]string{"A": {"c"}}},
 	}
 	for _, c := range cases {
-		req, _ := c.sling.Request()
+		req, _ := c.sling.request()
 		// type conversion from Header to alias'd map for deep equality comparison
 		headerMap := map[string][]string(req.Header)
 		if !reflect.DeepEqual(c.expectedHeader, headerMap) {
@@ -626,7 +626,7 @@ func TestDo_onSuccess(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -654,7 +654,7 @@ func TestDo_onSuccessWithNilValue(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://example.com/success", nil)
 
 	apiError := new(APIError)
-	resp, err := sling.Do(req, nil, apiError)
+	resp, err := sling.doDecode(req, nil, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -680,7 +680,7 @@ func TestDo_noContent(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -715,7 +715,7 @@ func TestDo_onFailure(t *testing.T) {
 
 	model := new(FakeModel)
 	apiError := new(APIError)
-	resp, err := sling.Do(req, model, apiError)
+	resp, err := sling.doDecode(req, model, apiError)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -744,7 +744,7 @@ func TestDo_onFailureWithNilValue(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://example.com/failure", nil)
 
 	model := new(FakeModel)
-	resp, err := sling.Do(req, model, nil)
+	resp, err := sling.doDecode(req, model, nil)
 
 	if err == nil {
 		t.Errorf("expected error, got nil")
@@ -769,7 +769,7 @@ func TestReceive_success_nonDefaultDecoder(t *testing.T) {
 			<temperature>10.5</temperature>
 		</response>`
 		fmt.Fprintf(w, xml.Header)
-		fmt.Fprintf(w, data)
+		fmt.Fprint(w, data)
 	})
 
 	endpoint := New().Client(client).Base("http://example.com/").Path("foo/").Post("submit")
@@ -922,6 +922,61 @@ func TestReceive_errorCreatingRequest(t *testing.T) {
 	}
 	if resp != nil {
 		t.Errorf("expected nil resp, got %v", resp)
+	}
+}
+
+type testTracer struct {
+	beginTrace func(ctx context.Context) error
+	endTrace   func(ctx context.Context) error
+}
+
+func (t *testTracer) BeginTrace(ctx context.Context) error {
+	return t.beginTrace(ctx)
+}
+
+func (t *testTracer) EndTrace(ctx context.Context) error {
+	return t.endTrace(ctx)
+}
+
+type tracerAndCalls struct {
+	*testTracer
+	calls []string
+}
+
+func newTestTracer() *tracerAndCalls {
+	tracer := &tracerAndCalls{calls: []string{}}
+	tracer.testTracer = &testTracer{
+		func(ctx context.Context) error {
+			tracer.calls = append(tracer.calls, "beginTrace")
+			return nil
+		},
+		func(ctx context.Context) error {
+			tracer.calls = append(tracer.calls, "endTrace")
+			return nil
+		},
+	}
+
+	return tracer
+}
+
+func TestTracer(t *testing.T) {
+	tracer := newTestTracer()
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	sling := New().Get(s.URL).Tracer(tracer)
+
+	if len(tracer.calls) != 0 {
+		t.Errorf("tracer should not be called yet but had calls %v", tracer.calls)
+	}
+
+	_, err := sling.Receive(nil, nil)
+	if err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+
+	if len(tracer.calls) != 2 || tracer.calls[0] != "beginTrace" || tracer.calls[1] != "endTrace" {
+		t.Errorf("expected to call beginTrace and then endTrace, calls were %+v", tracer.calls)
 	}
 }
 
