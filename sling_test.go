@@ -925,61 +925,6 @@ func TestReceive_errorCreatingRequest(t *testing.T) {
 	}
 }
 
-type testTracer struct {
-	beginTrace func(ctx context.Context) error
-	endTrace   func(ctx context.Context) error
-}
-
-func (t *testTracer) BeginTrace(ctx context.Context) error {
-	return t.beginTrace(ctx)
-}
-
-func (t *testTracer) EndTrace(ctx context.Context) error {
-	return t.endTrace(ctx)
-}
-
-type tracerAndCalls struct {
-	*testTracer
-	calls []string
-}
-
-func newTestTracer() *tracerAndCalls {
-	tracer := &tracerAndCalls{calls: []string{}}
-	tracer.testTracer = &testTracer{
-		func(ctx context.Context) error {
-			tracer.calls = append(tracer.calls, "beginTrace")
-			return nil
-		},
-		func(ctx context.Context) error {
-			tracer.calls = append(tracer.calls, "endTrace")
-			return nil
-		},
-	}
-
-	return tracer
-}
-
-func TestTracer(t *testing.T) {
-	tracer := newTestTracer()
-
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-
-	sling := New().Get(s.URL).Tracer(tracer)
-
-	if len(tracer.calls) != 0 {
-		t.Errorf("tracer should not be called yet but had calls %v", tracer.calls)
-	}
-
-	_, err := sling.Receive(nil, nil)
-	if err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-
-	if len(tracer.calls) != 2 || tracer.calls[0] != "beginTrace" || tracer.calls[1] != "endTrace" {
-		t.Errorf("expected to call beginTrace and then endTrace, calls were %+v", tracer.calls)
-	}
-}
-
 func TestReuseTcpConnections(t *testing.T) {
 	var connCount int32
 
