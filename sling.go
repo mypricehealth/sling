@@ -1,12 +1,11 @@
 package sling
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 
@@ -42,8 +41,6 @@ type Sling struct {
 	bodyProvider BodyProvider
 	// response decoder
 	responseDecoder ResponseDecoder
-	// allows tracing the request through its lifetime
-	tracer Tracer
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -269,12 +266,6 @@ func (s *Sling) QueryValues(values url.Values) *Sling {
 	return s
 }
 
-// Allows you to set a tracer to facilitate distributed tracing.
-func (s *Sling) Tracer(tracer Tracer) *Sling {
-	s.tracer = tracer
-	return s
-}
-
 // Body
 
 // Body sets the Sling's body. The body value will be set as the Body on new
@@ -450,7 +441,7 @@ func (s *Sling) Do(ctx context.Context) (*http.Response, error) {
 		return nil, err
 	}
 
-	resp, err := s.doWithTrace(req)
+	resp, err := s.do(req)
 	if err != nil {
 		return resp, err
 	}
@@ -462,18 +453,15 @@ func (s *Sling) Do(ctx context.Context) (*http.Response, error) {
 	return resp, nil
 }
 
-func (s *Sling) doWithTrace(req *http.Request) (*http.Response, error) {
-	if s.tracer != nil {
-		err := s.tracer.BeginTrace(req.Context())
-		if err != nil {
-			return nil, err
-		}
-	}
-
+func (s *Sling) do(req *http.Request) (*http.Response, error) {
 	resp, err := s.httpClient.Do(req)
-
-	if resp != nil && s.tracer != nil {
-		resp.Body = &bodyWithTracer{req.Context(), resp.Body, s.tracer, false}
+	if err != nil {
+		if err == context.Canceled {
+			ctxErr := context.Cause(req.Context())
+			if ctxErr != nil {
+				err = ctxErr
+			}
+		}
 	}
 
 	return resp, err
@@ -486,7 +474,7 @@ func (s *Sling) doWithTrace(req *http.Request) (*http.Response, error) {
 // decoding is skipped. Any error sending the request or decoding the response
 // is returned.
 func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
-	resp, err := s.doWithTrace(req)
+	resp, err := s.do(req)
 	if err != nil {
 		return resp, err
 	}
@@ -497,14 +485,23 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*ht
 	// reuse HTTP/1.x "keep-alive" TCP connections if the Body is
 	// not read to completion and closed.
 	// See: https://golang.org/pkg/net/http/#Response
-	defer io.Copy(ioutil.Discard, resp.Body)
+	defer io.Copy(io.Discard, resp.Body)
 
-	// Don't try to decode on 204s or Content-Length is 0
-	if resp.StatusCode == http.StatusNoContent || resp.ContentLength == 0 {
+	// Don't try to decode on 204s
+	if resp.StatusCode == http.StatusNoContent {
 		return resp, nil
 	}
 
-	// Decode from json
+	// Don't decode if the content length is 0
+	if resp.ContentLength == 0 {
+		if failureV == nil && !isSuccessful(resp.StatusCode) {
+			return resp, fmt.Errorf("status code %d was not successful and had no body", resp.StatusCode)
+		}
+
+		return resp, nil
+	}
+
+	// Decode the body
 	if successV != nil || failureV != nil {
 		err = decodeResponse(resp, s.responseDecoder, successV, failureV)
 	}
@@ -517,7 +514,7 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*ht
 // decoding is skipped.
 // Caller is responsible for closing the resp.Body.
 func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, failureV interface{}) error {
-	if code := resp.StatusCode; 200 <= code && code <= 299 {
+	if code := resp.StatusCode; isSuccessful(code) {
 		if successV != nil {
 			return decoder.Decode(resp, successV)
 		}
@@ -525,9 +522,42 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 		if failureV != nil {
 			return decoder.Decode(resp, failureV)
 		}
-		var buf bytes.Buffer
-		buf.ReadFrom(resp.Body)
-		return fmt.Errorf(buf.String())
+
+		body, err := readWithCap(resp.Body, 100)
+		if err != nil {
+			return fmt.Errorf("status code %d was not successful and could not get body: %w", code, err)
+		}
+
+		return fmt.Errorf("status code %d was not successful, got body: %s", code, body)
 	}
 	return nil
+}
+
+func isSuccessful(code int) bool {
+	return 200 <= code && code <= 299
+}
+
+func readWithCap(r io.Reader, cap int) (string, error) {
+	maxBodySize := 100
+
+	// Read one past the maximum body size to distinguish between a body with a length that's exactly `maxBodySize` and a body that's larger
+	buf := make([]byte, maxBodySize+1)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+
+	if n == 0 {
+		return "", fmt.Errorf("got no response content")
+	}
+
+	var body string
+	if n <= maxBodySize {
+		body = string(buf[:n])
+	} else {
+		// If the body is larger than the maxBodySize, it has to be truncated
+		body = string(buf[:maxBodySize]) + " (truncated)"
+	}
+
+	return body, nil
 }
