@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -565,6 +566,10 @@ func (s *Sling) do(req *http.Request) (*http.Response, error) {
 // decoding is skipped. Any error sending the request or decoding the response
 // is returned.
 func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Response, error) {
+	if successV == nil && failureV == nil {
+		return nil, fmt.Errorf("at least one of successV or failureV must be non-nil")
+	}
+
 	resp, err := s.do(req)
 	if err != nil {
 		return newResponse(resp), err
@@ -593,9 +598,7 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Re
 	}
 
 	// Decode the body
-	if successV != nil || failureV != nil {
-		err = decodeResponse(resp, s.responseDecoder, successV, failureV)
-	}
+	err = decodeResponse(resp, s.responseDecoder, successV, failureV)
 	return newResponse(resp), err
 }
 
@@ -616,15 +619,37 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 			return decode(resp, decoder, failureV)
 		}
 
-		limitedBody := newMaxSizeWriter(bodyContextCap)
-		_, err := limitedBody.ReadFrom(resp.Body)
+		body, err := readWithCap(resp.Body, bodyContextCap)
 		if err != nil {
 			return fmt.Errorf("status code %d was not successful and could not read body: %w", code, err)
 		}
 
-		return fmt.Errorf("status code %d was not successful, got body: %s", code, limitedBody.String())
+		return fmt.Errorf("status code %d was not successful, got body: %s", code, body)
 	}
 	return nil
+}
+
+func readWithCap(r io.Reader, cap int) (string, error) {
+	// Read one past the cap to distinguish between a body with a length that's exactly `cap` and a body that's larger
+	buf := make([]byte, cap+1)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+
+	if n == 0 {
+		return "", fmt.Errorf("got no response content")
+	}
+
+	var body string
+	if n <= cap {
+		body = string(buf[:n])
+	} else {
+		// If the body is larger than the cap, it has to be truncated
+		body = string(buf[:cap]) + " (truncated)"
+	}
+
+	return body, nil
 }
 
 type maxSizeWriter struct {
@@ -648,29 +673,6 @@ func (w *maxSizeWriter) Write(p []byte) (int, error) {
 	}
 
 	return len(p), nil
-}
-
-func (w *maxSizeWriter) ReadFrom(r io.Reader) (int64, error) {
-	read := int64(0)
-	for {
-		n, err := r.Read(w.bytes)
-		if err == io.EOF {
-			return 0, nil
-		}
-
-		if n == 0 {
-			// There's no more capacity to write
-			if len(w.bytes) == 0 {
-				break
-			}
-
-			continue
-		}
-
-		read += int64(n)
-	}
-
-	return read, nil
 }
 
 func (w *maxSizeWriter) String() string {
