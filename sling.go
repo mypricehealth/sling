@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -597,6 +596,8 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Re
 	return newResponse(resp), err
 }
 
+var bodyContextCap = 100
+
 // decodeResponse decodes response Body into the value pointed to by successV
 // if the response is a success (2XX) or into the value pointed to by failureV
 // otherwise. If the successV or failureV argument to decode into is nil,
@@ -605,48 +606,95 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Re
 func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, failureV interface{}) error {
 	if code := resp.StatusCode; isSuccessful(code) {
 		if successV != nil {
-			return decoder.Decode(resp, successV)
+			return decode(resp, decoder, successV)
 		}
 	} else {
 		if failureV != nil {
-			return decoder.Decode(resp, failureV)
+			return decode(resp, decoder, failureV)
 		}
 
-		body, err := readWithCap(resp.Body, 100)
+		limitedBody := newMaxSizeWriter(bodyContextCap)
+		_, err := limitedBody.ReadFrom(resp.Body)
 		if err != nil {
-			return fmt.Errorf("status code %d was not successful and could not get body: %w", code, err)
+			return fmt.Errorf("status code %d was not successful and could not read body: %w", code, err)
 		}
 
-		return fmt.Errorf("status code %d was not successful, got body: %s", code, body)
+		return fmt.Errorf("status code %d was not successful, got body: %s", code, limitedBody.String())
 	}
+	return nil
+}
+
+type maxSizeWriter struct {
+	bytes        []byte
+	triedWriting int
+}
+
+func newMaxSizeWriter(maxSize int) *maxSizeWriter {
+	return &maxSizeWriter{bytes: make([]byte, 0, maxSize)}
+}
+
+func (w *maxSizeWriter) Write(p []byte) (int, error) {
+	w.triedWriting += len(p)
+
+	unwrittenBytes := cap(w.bytes) - len(w.bytes)
+
+	if len(p) < unwrittenBytes {
+		w.bytes = append(w.bytes, p...)
+	} else {
+		w.bytes = append(w.bytes, p[:unwrittenBytes]...)
+	}
+
+	return len(p), nil
+}
+
+func (w *maxSizeWriter) ReadFrom(r io.Reader) (int64, error) {
+	read := int64(0)
+	for {
+		n, err := r.Read(w.bytes)
+		if err == io.EOF {
+			return 0, nil
+		}
+
+		if n == 0 {
+			// There's no more capacity to write
+			if len(w.bytes) == 0 {
+				break
+			}
+
+			continue
+		}
+
+		read += int64(n)
+	}
+
+	return read, nil
+}
+
+func (w *maxSizeWriter) String() string {
+	if w.triedWriting > len(w.bytes) {
+		return string(w.bytes) + " (truncated)"
+	}
+
+	return string(w.bytes)
+}
+
+type readAndClose struct {
+	io.Reader
+	io.Closer
+}
+
+func decode(resp *http.Response, decoder ResponseDecoder, v interface{}) error {
+	bodyContext := newMaxSizeWriter(bodyContextCap)
+	resp.Body = &readAndClose{io.TeeReader(resp.Body, bodyContext), resp.Body}
+
+	err := decoder.Decode(resp, v)
+	if err != nil {
+		return fmt.Errorf("could not decode response with status code %d: %w, got body %q", resp.StatusCode, err, bodyContext.String())
+	}
+
 	return nil
 }
 
 func isSuccessful(code int) bool {
 	return 200 <= code && code <= 299
-}
-
-func readWithCap(r io.Reader, cap int) (string, error) {
-	maxBodySize := 100
-
-	// Read one past the maximum body size to distinguish between a body with a length that's exactly `maxBodySize` and a body that's larger
-	buf := make([]byte, maxBodySize+1)
-	n, err := io.ReadFull(r, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return "", err
-	}
-
-	if n == 0 {
-		return "", fmt.Errorf("got no response content")
-	}
-
-	var body string
-	if n <= maxBodySize {
-		body = string(buf[:n])
-	} else {
-		// If the body is larger than the maxBodySize, it has to be truncated
-		body = string(buf[:maxBodySize]) + " (truncated)"
-	}
-
-	return body, nil
 }
