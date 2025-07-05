@@ -89,6 +89,9 @@ type Response struct {
 }
 
 func newResponse(resp *http.Response) *Response {
+	if resp == nil {
+		return nil
+	}
 	return &Response{
 		Status:           resp.Status,
 		StatusCode:       resp.StatusCode,
