@@ -904,7 +904,7 @@ func TestReceive_noContent(t *testing.T) {
 	})
 
 	endpoint := New().Client(client).Base("http://example.com/").Path("foo/").Head("submit")
-	resp, err := endpoint.New().Receive(nil, nil)
+	resp, err := endpoint.New().Receive(&FakeModel{}, nil)
 
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
@@ -948,7 +948,7 @@ func TestReuseTcpConnections(t *testing.T) {
 	endpoint := New().Client(http.DefaultClient).Base(rawURL).Path("foo/").Get("get")
 
 	for i := 0; i < 10; i++ {
-		resp, err := endpoint.New().Receive(nil, nil)
+		resp, err := endpoint.New().Receive(&FakeModel{}, nil)
 		if err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
@@ -1010,4 +1010,22 @@ func assertPostForm(t *testing.T, expected map[string]string, req *http.Request)
 	if !reflect.DeepEqual(expectedValues, req.PostForm) {
 		t.Errorf("expected parameters %v, got %v", expected, req.PostForm)
 	}
+}
+
+func TestDoDecode(t *testing.T) {
+	resp := &http.Response{StatusCode: 500, ContentLength: 4, Body: io.NopCloser(strings.NewReader("test"))}
+	s := New().Doer(&fakeDoer{Response: resp})
+	_, err := s.doDecode(nil, &FakeModel{}, nil)
+	if err == nil || err.Error() != "status code 500 was not successful, got body: test" {
+		t.Fatal("unexpected error, got", err)
+	}
+}
+
+type fakeDoer struct {
+	Response *http.Response
+	Err      error
+}
+
+func (f *fakeDoer) Do(req *http.Request) (*http.Response, error) {
+	return f.Response, f.Err
 }

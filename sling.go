@@ -2,7 +2,9 @@ package sling
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +18,97 @@ const (
 	jsonContentType = "application/json"
 	formContentType = "application/x-www-form-urlencoded"
 )
+
+// Response is a clone of the http.Response but excluding the Body. Body
+// is not included because it has already been consumed by Sling.
+type Response struct {
+	Status     string // e.g. "200 OK"
+	StatusCode int    // e.g. 200
+	Proto      string // e.g. "HTTP/1.0"
+	ProtoMajor int    // e.g. 1
+	ProtoMinor int    // e.g. 0
+
+	// Header maps header keys to values. If the response had multiple
+	// headers with the same key, they may be concatenated, with comma
+	// delimiters.  (RFC 7230, section 3.2.2 requires that multiple headers
+	// be semantically equivalent to a comma-delimited sequence.) When
+	// Header values are duplicated by other fields in this struct (e.g.,
+	// ContentLength, TransferEncoding, Trailer), the field values are
+	// authoritative.
+	//
+	// Keys in the map are canonicalized (see CanonicalHeaderKey).
+	Header http.Header
+
+	// ContentLength records the length of the associated content. The
+	// value -1 indicates that the length is unknown. Unless Request.Method
+	// is "HEAD", values >= 0 indicate that the given number of bytes may
+	// be read from Body.
+	ContentLength int64
+
+	// Contains transfer encodings from outer-most to inner-most. Value is
+	// nil, means that "identity" encoding is used.
+	TransferEncoding []string
+
+	// Close records whether the header directed that the connection be
+	// closed after reading Body. The value is advice for clients: neither
+	// ReadResponse nor Response.Write ever closes a connection.
+	Close bool
+
+	// Uncompressed reports whether the response was sent compressed but
+	// was decompressed by the http package. When true, reading from
+	// Body yields the uncompressed content instead of the compressed
+	// content actually set from the server, ContentLength is set to -1,
+	// and the "Content-Length" and "Content-Encoding" fields are deleted
+	// from the responseHeader. To get the original response from
+	// the server, set Transport.DisableCompression to true.
+	Uncompressed bool
+
+	// Trailer maps trailer keys to values in the same
+	// format as Header.
+	//
+	// The Trailer initially contains only nil values, one for
+	// each key specified in the server's "Trailer" header
+	// value. Those values are not added to Header.
+	//
+	// Trailer must not be accessed concurrently with Read calls
+	// on the Body.
+	//
+	// After Body.Read has returned io.EOF, Trailer will contain
+	// any trailer values sent by the server.
+	Trailer http.Header
+
+	// Request is the request that was sent to obtain this Response.
+	// Request's Body is nil (having already been consumed).
+	// This is only populated for Client requests.
+	Request *http.Request
+
+	// TLS contains information about the TLS connection on which the
+	// response was received. It is nil for unencrypted responses.
+	// The pointer is shared between responses and should not be
+	// modified.
+	TLS *tls.ConnectionState
+}
+
+func newResponse(resp *http.Response) *Response {
+	if resp == nil {
+		return nil
+	}
+	return &Response{
+		Status:           resp.Status,
+		StatusCode:       resp.StatusCode,
+		Proto:            resp.Proto,
+		ProtoMajor:       resp.ProtoMajor,
+		ProtoMinor:       resp.ProtoMinor,
+		Header:           resp.Header,
+		ContentLength:    resp.ContentLength,
+		TransferEncoding: resp.TransferEncoding,
+		Close:            resp.Close,
+		Uncompressed:     resp.Uncompressed,
+		Trailer:          resp.Trailer,
+		Request:          resp.Request,
+		TLS:              resp.TLS,
+	}
+}
 
 // Doer executes http requests.  It is implemented by *http.Client.  You can
 // wrap *http.Client with layers of Doers to form a stack of client-side
@@ -404,7 +497,7 @@ func (s *Sling) ResponseDecoder(decoder ResponseDecoder) *Sling {
 // responses (2XX) are JSON decoded into the value pointed to by successV.
 // Any error creating the request, sending it, or decoding a 2XX response
 // is returned.
-func (s *Sling) ReceiveSuccess(successV interface{}) (*http.Response, error) {
+func (s *Sling) ReceiveSuccess(successV interface{}) (*Response, error) {
 	return s.Receive(successV, nil)
 }
 
@@ -415,7 +508,7 @@ func (s *Sling) ReceiveSuccess(successV interface{}) (*http.Response, error) {
 // decoding is skipped. Any error creating the request, sending it, or decoding
 // the response is returned.
 // Receive is shorthand for calling Request and Do.
-func (s *Sling) Receive(successV, failureV interface{}) (*http.Response, error) {
+func (s *Sling) Receive(successV, failureV interface{}) (*Response, error) {
 	return s.ReceiveWithContext(context.Background(), successV, failureV)
 }
 
@@ -426,7 +519,7 @@ func (s *Sling) Receive(successV, failureV interface{}) (*http.Response, error) 
 // decoding is skipped. Any error creating the request, sending it, or decoding
 // the response is returned.
 // Receive is shorthand for calling Request and Do.
-func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV interface{}) (*http.Response, error) {
+func (s *Sling) ReceiveWithContext(ctx context.Context, successV, failureV interface{}) (*Response, error) {
 	req, err := s.requestWithContext(ctx)
 	if err != nil {
 		return nil, err
@@ -472,10 +565,14 @@ func (s *Sling) do(req *http.Request) (*http.Response, error) {
 // If the status code of response is 204(no content) or the Content-Length is 0,
 // decoding is skipped. Any error sending the request or decoding the response
 // is returned.
-func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
+func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Response, error) {
+	if successV == nil && failureV == nil {
+		return nil, fmt.Errorf("at least one of successV or failureV must be non-nil")
+	}
+
 	resp, err := s.do(req)
 	if err != nil {
-		return resp, err
+		return newResponse(resp), err
 	}
 	// when err is nil, resp contains a non-nil resp.Body which must be closed
 	defer resp.Body.Close()
@@ -488,23 +585,21 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*ht
 
 	// Don't try to decode on 204s
 	if resp.StatusCode == http.StatusNoContent {
-		return resp, nil
+		return newResponse(resp), nil
 	}
 
 	// Don't decode if the content length is 0
 	if resp.ContentLength == 0 {
 		if failureV == nil && !isSuccessful(resp.StatusCode) {
-			return resp, fmt.Errorf("status code %d was not successful and had no body", resp.StatusCode)
+			return newResponse(resp), fmt.Errorf("status code %d was not successful and had no body", resp.StatusCode)
 		}
 
-		return resp, nil
+		return newResponse(resp), nil
 	}
 
 	// Decode the body
-	if successV != nil || failureV != nil {
-		err = decodeResponse(resp, s.responseDecoder, successV, failureV)
-	}
-	return resp, err
+	err = decodeResponse(resp, s.responseDecoder, successV, failureV)
+	return newResponse(resp), err
 }
 
 var bodyContextCap = 100
@@ -524,15 +619,37 @@ func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, fail
 			return decode(resp, decoder, failureV)
 		}
 
-		limitedBody := newMaxSizeWriter(bodyContextCap)
-		_, err := limitedBody.ReadFrom(resp.Body)
+		body, err := readWithCap(resp.Body, bodyContextCap)
 		if err != nil {
 			return fmt.Errorf("status code %d was not successful and could not read body: %w", code, err)
 		}
 
-		return fmt.Errorf("status code %d was not successful, got body: %s", code, limitedBody.String())
+		return fmt.Errorf("status code %d was not successful, got body: %s", code, body)
 	}
 	return nil
+}
+
+func readWithCap(r io.Reader, cap int) (string, error) {
+	// Read one past the cap to distinguish between a body with a length that's exactly `cap` and a body that's larger
+	buf := make([]byte, cap+1)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+
+	if n == 0 {
+		return "", fmt.Errorf("got no response content")
+	}
+
+	var body string
+	if n <= cap {
+		body = string(buf[:n])
+	} else {
+		// If the body is larger than the cap, it has to be truncated
+		body = string(buf[:cap]) + " (truncated)"
+	}
+
+	return body, nil
 }
 
 type maxSizeWriter struct {
@@ -556,29 +673,6 @@ func (w *maxSizeWriter) Write(p []byte) (int, error) {
 	}
 
 	return len(p), nil
-}
-
-func (w *maxSizeWriter) ReadFrom(r io.Reader) (int64, error) {
-	read := int64(0)
-	for {
-		n, err := r.Read(w.bytes)
-		if err == io.EOF {
-			return 0, nil
-		}
-
-		if n == 0 {
-			// There's no more capacity to write
-			if len(w.bytes) == 0 {
-				break
-			}
-
-			continue
-		}
-
-		read += int64(n)
-	}
-
-	return read, nil
 }
 
 func (w *maxSizeWriter) String() string {
