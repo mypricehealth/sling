@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 
 	goquery "github.com/google/go-querystring/query"
 )
@@ -133,6 +134,8 @@ type Sling struct {
 	bodyProvider BodyProvider
 	// response decoder
 	responseDecoder ResponseDecoder
+	// whether an empty response is allowed
+	allowEmpty bool
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -493,6 +496,11 @@ func (s *Sling) ResponseDecoder(decoder ResponseDecoder) *Sling {
 	return s
 }
 
+func (s *Sling) AllowEmpty(allowEmpty bool) *Sling {
+	s.allowEmpty = allowEmpty
+	return s
+}
+
 // ReceiveSuccess creates a new HTTP request and returns the response. Success
 // responses (2XX) are JSON decoded into the value pointed to by successV.
 // Any error creating the request, sending it, or decoding a 2XX response
@@ -598,7 +606,7 @@ func (s *Sling) doDecode(req *http.Request, successV, failureV interface{}) (*Re
 	}
 
 	// Decode the body
-	err = decodeResponse(resp, s.responseDecoder, successV, failureV)
+	err = decodeResponse(resp, s.responseDecoder, successV, failureV, s.allowEmpty)
 	return newResponse(resp), err
 }
 
@@ -609,14 +617,14 @@ var bodyContextCap = 100
 // otherwise. If the successV or failureV argument to decode into is nil,
 // decoding is skipped.
 // Caller is responsible for closing the resp.Body.
-func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, failureV interface{}) error {
+func decodeResponse(resp *http.Response, decoder ResponseDecoder, successV, failureV interface{}, allowEmpty bool) error {
 	if code := resp.StatusCode; isSuccessful(code) {
 		if successV != nil {
-			return decode(resp, decoder, successV)
+			return decode(resp, decoder, successV, allowEmpty)
 		}
 	} else {
 		if failureV != nil {
-			return decode(resp, decoder, failureV)
+			return decode(resp, decoder, failureV, allowEmpty)
 		}
 
 		body, err := readWithCap(resp.Body, bodyContextCap)
@@ -688,13 +696,17 @@ type readAndClose struct {
 	io.Closer
 }
 
-func decode(resp *http.Response, decoder ResponseDecoder, v interface{}) error {
+func decode(resp *http.Response, decoder ResponseDecoder, v interface{}, allowEmpty bool) error {
 	bodyContext := newMaxSizeWriter(bodyContextCap)
 	resp.Body = &readAndClose{io.TeeReader(resp.Body, bodyContext), resp.Body}
 
 	err := decoder.Decode(resp, v)
 	if err != nil {
 		return fmt.Errorf("could not decode response with status code %d: %w, got body %q", resp.StatusCode, err, bodyContext.String())
+	}
+
+	if !allowEmpty && reflect.ValueOf(v).IsZero() {
+		return fmt.Errorf("got zero value response with status code %d, got body %q", resp.StatusCode, bodyContext.String())
 	}
 
 	return nil
